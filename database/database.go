@@ -34,8 +34,11 @@ func Connect() {
 	}
 
 	db.Exec("CREATE EXTENSION IF NOT EXISTS vector;")
-	db.Exec("CREATE INDEX IF NOT EXISTS ON image_embeddings USING hnsw (embedding vector_cosine_ops);")
-	db.AutoMigrate(&models.ImageEmbedding{})
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_embedding ON image_embeddings USING hnsw (embedding vector_cosine_ops);")
+
+	if !db.Migrator().HasTable(&models.ImageEmbedding{}) {
+		db.AutoMigrate(&models.ImageEmbedding{})
+	}
 
 	DB = db
 	fmt.Println("Database connected successfully!")

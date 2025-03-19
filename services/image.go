@@ -12,17 +12,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-type OllamaRequest struct {
-	Model  string   `json:"model"`
-	Prompt string   `json:"prompt"`
-	Stream bool     `json:"stream"`
-	Images []string `json:"images"`
-}
-
-type OllamaResponse struct {
-	Embedding []float32 `json:"embedding"`
-}
-
 func ExtractTextFromImage(imagePath string) (string, error) {
 	file, err := os.Open(imagePath)
 	if err != nil {
@@ -39,23 +28,16 @@ func ExtractTextFromImage(imagePath string) (string, error) {
 		model = "gemma3"
 	}
 
-	ollamaHost := os.Getenv("OLLAMA_HOST")
-	if ollamaHost == "" {
-		ollamaHost = "localhost"
-	}
-
-	ollamaURL := fmt.Sprintf("http://%s:11434/api/generate", ollamaHost)
-
-	requestBody, _ := json.Marshal(OllamaRequest{
+	ollamaConnction := NewOllamaConnection(GenerateEndpoint, model, OllamaRequest{
 		Model:  model,
 		Prompt: "Tell me what's happening in this image and figure out the context in natural language, always respond using the markdown syntax",
 		Images: []string{imageBase64},
 		Stream: false,
 	})
 
-	resp, err := http.Post(ollamaURL, "application/json", bytes.NewBuffer(requestBody))
+	resp, err := ollamaConnction.Request()
 	if err != nil {
-		return "", fmt.Errorf("failed to call Ollama at %s: %v", ollamaURL, err)
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -175,10 +157,7 @@ func ParallelExtractTextFromImages(imagePaths []string, maxChunkSize int, maxPar
 	// Split into chunks
 	chunks := make([][]string, 0)
 	for i := 0; i < len(imagePaths); i += maxChunkSize {
-		end := i + maxChunkSize
-		if end > len(imagePaths) {
-			end = len(imagePaths)
-		}
+		end := min(i+maxChunkSize, len(imagePaths))
 		chunks = append(chunks, imagePaths[i:end])
 	}
 
