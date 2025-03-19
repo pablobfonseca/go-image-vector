@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	ImageProcessingQueue = "image_processing"
+	MediaProcessingQueue = "media_processing"
+	ImageProcessingQueue = "image_processing" // Kept for backward compatibility
 )
 
 var (

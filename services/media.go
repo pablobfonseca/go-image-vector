@@ -8,7 +8,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/pablobfonseca/go-image-vector/models"
 	"github.com/spf13/viper"
 )
 
@@ -23,16 +26,28 @@ type OllamaResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-func ExtractTextFromImage(imagePath string) (string, error) {
-	file, err := os.Open(imagePath)
+// DetectMediaType determines if a file is an image or video based on extension
+func DetectMediaType(filePath string) models.MediaType {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	switch ext {
+	case ".mp4", ".mov", ".avi", ".mkv", ".webm":
+		return models.MediaTypeVideo
+	default:
+		return models.MediaTypeImage
+	}
+}
+
+// ExtractTextFromMedia extracts text description from media file (image or video)
+func ExtractTextFromMedia(filePath string) (string, error) {
+	file, err := os.Open(filePath)
 	if err != nil {
 		return "", err
 	}
 
 	defer file.Close()
 
-	imageBytes, _ := io.ReadAll(file)
-	imageBase64 := base64.StdEncoding.EncodeToString(imageBytes)
+	mediaBytes, _ := io.ReadAll(file)
+	mediaBase64 := base64.StdEncoding.EncodeToString(mediaBytes)
 
 	model := viper.GetString("MODEL")
 	if model == "" {
@@ -46,10 +61,16 @@ func ExtractTextFromImage(imagePath string) (string, error) {
 
 	ollamaURL := fmt.Sprintf("http://%s:11434/api/generate", ollamaHost)
 
+	mediaType := DetectMediaType(filePath)
+	prompt := "Tell me what's happening in this image and figure out the context in natural language, always respond using the markdown syntax"
+	if mediaType == models.MediaTypeVideo {
+		prompt = "Tell me what's happening in this video and figure out the context in natural language, always respond using the markdown syntax"
+	}
+
 	requestBody, _ := json.Marshal(OllamaRequest{
 		Model:  model,
-		Prompt: "Tell me what's happening in this image and figure out the context in natural language, always respond using the markdown syntax",
-		Images: []string{imageBase64},
+		Prompt: prompt,
+		Images: []string{mediaBase64},
 		Stream: false,
 	})
 
@@ -78,4 +99,9 @@ func ExtractTextFromImage(imagePath string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no response field in API result")
+}
+
+// ExtractTextFromImage is kept for backward compatibility
+func ExtractTextFromImage(imagePath string) (string, error) {
+	return ExtractTextFromMedia(imagePath)
 }

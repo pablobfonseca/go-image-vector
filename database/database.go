@@ -34,7 +34,7 @@ func Connect() {
 	}
 
 	db.Exec("CREATE EXTENSION IF NOT EXISTS vector;")
-	db.AutoMigrate(&models.ImageEmbedding{})
+	db.AutoMigrate(&models.MediaEmbedding{})
 
 	DB = db
 	fmt.Println("Database connected successfully!")

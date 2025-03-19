@@ -17,7 +17,8 @@ import (
 
 // Task types
 const (
-	TaskTypeAnalyzeImage = "analyze_image"
+	TaskTypeAnalyzeMedia = "analyze_media"
+	TaskTypeAnalyzeImage = "analyze_image" // Kept for backward compatibility
 )
 
 // Worker represents a background worker that processes tasks from a queue
@@ -109,7 +110,7 @@ func (w *Worker) processItems(workerID int) {
 			var result map[string]any
 
 			switch task.TaskType {
-			case TaskTypeAnalyzeImage:
+			case TaskTypeAnalyzeMedia, TaskTypeAnalyzeImage:
 				result, processErr = processImageAnalysisTask(task)
 			default:
 				processErr = nil
@@ -141,16 +142,19 @@ func (w *Worker) processItems(workerID int) {
 	}
 }
 
-// processImageAnalysisTask processes an image analysis task
-func processImageAnalysisTask(task *queue.TaskPayload) (map[string]any, error) {
+// processMediaAnalysisTask processes a media (image or video) analysis task
+func processMediaAnalysisTask(task *queue.TaskPayload) (map[string]any, error) {
 	// Extract file path from task data
 	filePath, ok := task.Data["file_path"].(string)
 	if !ok {
 		return nil, nil
 	}
 
-	// Extract text from image using AI
-	text, err := services.ExtractTextFromImage(filePath)
+	// Detect media type
+	mediaType := services.DetectMediaType(filePath)
+
+	// Extract text from media using AI
+	text, err := services.ExtractTextFromMedia(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -162,27 +166,34 @@ func processImageAnalysisTask(task *queue.TaskPayload) (map[string]any, error) {
 	}
 
 	// Save to database
-	imageEntry := models.ImageEmbedding{
+	mediaEntry := models.MediaEmbedding{
 		FilePath:  filePath,
+		MediaType: mediaType,
 		Text:      text,
 		Embedding: pgvector.NewVector(embedding),
 	}
 
-	if err := database.DB.Create(&imageEntry).Error; err != nil {
+	if err := database.DB.Create(&mediaEntry).Error; err != nil {
 		return nil, err
 	}
 
 	// Return result
 	return map[string]interface{}{
-		"id":        imageEntry.ID,
-		"file_path": imageEntry.FilePath,
-		"text":      imageEntry.Text,
+		"id":         mediaEntry.ID,
+		"file_path":  mediaEntry.FilePath,
+		"media_type": mediaEntry.MediaType,
+		"text":       mediaEntry.Text,
 	}, nil
 }
 
-// RunWorkers starts a pool of workers for image processing
+// processImageAnalysisTask handles legacy image analysis tasks
+func processImageAnalysisTask(task *queue.TaskPayload) (map[string]any, error) {
+	return processMediaAnalysisTask(task)
+}
+
+// RunWorkers starts a pool of workers for media processing
 func RunWorkers(ctx context.Context, numWorkers int) *Worker {
-	worker := NewWorker(queue.ImageProcessingQueue, numWorkers)
+	worker := NewWorker(queue.MediaProcessingQueue, numWorkers)
 	worker.Start()
 	return worker
 }

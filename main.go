@@ -23,8 +23,8 @@ import (
 	"github.com/spf13/viper"
 )
 
-// uploadImage handles image uploads and queues analysis tasks
-func uploadImage(w http.ResponseWriter, r *http.Request) {
+// uploadMedia handles media (images and videos) uploads and queues analysis tasks
+func uploadMedia(w http.ResponseWriter, r *http.Request) {
 	uploadsDir := "./uploads"
 	if _, err := os.Stat(uploadsDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(uploadsDir, 0755); err != nil {
@@ -33,18 +33,19 @@ func uploadImage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	r.ParseMultipartForm(50 << 20)
+	// Increase max form size to handle larger video files (100MB)
+	r.ParseMultipartForm(100 << 20)
 
 	form := r.MultipartForm
-	files := form.File["images"]
+	files := form.File["media"]
 
 	if len(files) == 0 {
-		http.Error(w, "No images uploaded", http.StatusBadRequest)
+		http.Error(w, "No media files uploaded", http.StatusBadRequest)
 		return
 	}
 
 	if len(files) > 5 {
-		http.Error(w, "Maximum 5 images allowed", http.StatusBadRequest)
+		http.Error(w, "Maximum 5 files allowed", http.StatusBadRequest)
 		return
 	}
 
@@ -75,14 +76,14 @@ func uploadImage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Queue the image analysis task
+		// Queue the media analysis task
 		taskData := map[string]any{
 			"file_path": filePath,
 		}
 
-		taskID, err := queue.Enqueue(queue.ImageProcessingQueue, worker.TaskTypeAnalyzeImage, taskData)
+		taskID, err := queue.Enqueue(queue.MediaProcessingQueue, worker.TaskTypeAnalyzeMedia, taskData)
 		if err != nil {
-			http.Error(w, "Failed to queue image for processing: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to queue media for processing: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -93,9 +94,14 @@ func uploadImage(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]any{
-		"message":  "Images uploaded and queued for processing",
+		"message":  "Media files uploaded and queued for processing",
 		"task_ids": taskIDs,
 	})
+}
+
+// uploadImage is kept for backward compatibility
+func uploadImage(w http.ResponseWriter, r *http.Request) {
+	uploadMedia(w, r)
 }
 
 // getTaskStatus retrieves the status of a task
@@ -139,11 +145,12 @@ func getTaskStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// searchImages finds similar images based on text query
-func searchImages(w http.ResponseWriter, r *http.Request) {
+// searchMedia finds similar media (images/videos) based on text query
+func searchMedia(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		QueryText string `json:"query"`
-		TopK      int    `json:"top_k"`
+		QueryText string           `json:"query"`
+		TopK      int              `json:"top_k"`
+		MediaType models.MediaType `json:"media_type,omitempty"` // Optional filter by media type
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -161,15 +168,29 @@ func searchImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var results []models.ImageEmbedding
-	if err := database.DB.Raw(`SELECT * FROM image_embeddings ORDER BY embedding <-> ? LIMIT ?`,
-		pgvector.NewVector(queryEmbedding), req.TopK).Scan(&results).Error; err != nil {
+	var results []models.MediaEmbedding
+	query := database.DB.Table("media_embeddings")
+
+	// Filter by media type if provided
+	if req.MediaType != "" {
+		query = query.Where("media_type = ?", req.MediaType)
+	}
+
+	// Order by vector similarity and limit results
+	if err := query.Order(database.DB.Raw("embedding <-> ?", pgvector.NewVector(queryEmbedding))).
+		Limit(req.TopK).
+		Find(&results).Error; err != nil {
 		http.Error(w, "Failed to search database: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(results)
+}
+
+// searchImages is kept for backward compatibility
+func searchImages(w http.ResponseWriter, r *http.Request) {
+	searchMedia(w, r)
 }
 
 func main() {
@@ -192,10 +213,12 @@ func main() {
 	apiRouter := r.PathPrefix("/api/v1").Subrouter()
 
 	apiRouter.HandleFunc("/upload", uploadImage).Methods("POST")
+	apiRouter.HandleFunc("/upload-media", uploadMedia).Methods("POST")
 	apiRouter.HandleFunc("/search", searchImages).Methods("POST")
 	apiRouter.HandleFunc("/tasks/{taskID}", getTaskStatus).Methods("GET")
 
 	r.HandleFunc("/upload", uploadImage).Methods("POST")
+	r.HandleFunc("/upload-media", uploadMedia).Methods("POST")
 	r.HandleFunc("/search", searchImages).Methods("POST")
 
 	uploadsDir := "./uploads"

@@ -11,12 +11,19 @@ type Embedding = {
   file_path: string;
   text: string;
   embedding: Array<number>;
+  media_type: "video" | "image";
 };
 
 type TaskStatus = {
   task_id: string;
   status: string;
   result?: any;
+};
+
+type SearchData = {
+  query: string;
+  top_k: number;
+  media_type: "all" | "video" | "image";
 };
 
 export default function Home() {
@@ -82,14 +89,17 @@ export default function Home() {
     setTimeout(() => setNotification(null), 3000);
   };
 
-  const uploadImage = async () => {
+  const uploadMedia = async () => {
     if (files.length === 0) {
-      showNotification("Please select at least one image", "error");
+      showNotification(
+        "Please select at least one file (image or video)",
+        "error",
+      );
       return;
     }
 
     if (files.length > 5) {
-      showNotification("Maximum 5 images allowed", "error");
+      showNotification("Maximum 5 files allowed", "error");
       return;
     }
 
@@ -97,11 +107,11 @@ export default function Home() {
     try {
       let formData = new FormData();
       files.forEach((file) => {
-        formData.append("images", file);
+        formData.append("media", file);
       });
 
       const response = await axios.post(
-        `${API_BASE_URL}${API_VERSION}/upload`,
+        `${API_BASE_URL}${API_VERSION}/upload-media`,
         formData,
       );
       const { task_ids } = response.data;
@@ -126,6 +136,9 @@ export default function Home() {
     }
   };
 
+  const [mediaFilter, setMediaFilter] =
+    useState<SearchData["media_type"]>("all");
+
   const handleSearch = async () => {
     if (!query.trim()) {
       showNotification("Please enter a search query", "error");
@@ -134,10 +147,19 @@ export default function Home() {
 
     setLoading(true);
     try {
-      const res = await axios.post(`${API_BASE_URL}${API_VERSION}/search`, {
+      const searchData: Partial<SearchData> = {
         query,
         top_k: 5,
-      });
+      };
+
+      if (mediaFilter !== "all") {
+        searchData.media_type = mediaFilter;
+      }
+
+      const res = await axios.post(
+        `${API_BASE_URL}${API_VERSION}/search`,
+        searchData,
+      );
       setResults(res.data);
     } catch (error) {
       showNotification("Search failed", "error");
@@ -150,7 +172,7 @@ export default function Home() {
     <div className="flex flex-col items-center min-h-screen bg-gray-900 text-white p-4 md:p-6">
       <div className="max-w-4xl w-full">
         <h1 className="text-3xl md:text-4xl font-bold text-center my-8">
-          🖼️ Image Analyzer + Vector DB
+          🖼️📹 Media Analyzer + Vector DB
         </h1>
 
         {notification && (
@@ -169,18 +191,18 @@ export default function Home() {
 
         <div className="bg-gray-800 rounded-lg p-5 mb-6 shadow-lg">
           <h2 className="text-xl font-semibold mb-4">
-            Upload Images (Up to 5)
+            Upload Media (Up to 5 Images or Videos)
           </h2>
           <div className="flex flex-col gap-3">
             <div className="flex-grow">
               <label className="block p-3 rounded border border-gray-600 bg-gray-700 text-white cursor-pointer hover:bg-gray-600 transition-colors">
                 {files.length > 0
-                  ? `${files.length} image(s) selected`
-                  : "Select up to 5 images"}
+                  ? `${files.length} file(s) selected`
+                  : "Select up to 5 images or videos"}
                 <input
                   className="hidden"
                   type="file"
-                  accept="image/*"
+                  accept="image/*,video/*"
                   multiple
                   onChange={(e) => {
                     const fileList = e.target.files;
@@ -216,7 +238,7 @@ export default function Home() {
             )}
             <div className="mt-3">
               <button
-                onClick={uploadImage}
+                onClick={uploadMedia}
                 disabled={uploadLoading || files.length === 0}
                 className={`w-full px-5 py-3 bg-blue-600 rounded-md font-medium transition-colors ${
                   uploadLoading || files.length === 0
@@ -302,7 +324,7 @@ export default function Home() {
         )}
 
         <div className="bg-gray-800 rounded-lg p-5 mb-6 shadow-lg">
-          <h2 className="text-xl font-semibold mb-4">Search Images</h2>
+          <h2 className="text-xl font-semibold mb-4">Search Media</h2>
           <div className="flex flex-col sm:flex-row gap-3">
             <input
               type="text"
@@ -312,6 +334,19 @@ export default function Home() {
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
             />
+
+            <select
+              className="p-3 rounded-md border border-gray-600 bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={mediaFilter}
+              onChange={(e) =>
+                setMediaFilter(e.target.value as SearchData["media_type"])
+              }
+            >
+              <option value="all">All Media</option>
+              <option value="image">Images Only</option>
+              <option value="video">Videos Only</option>
+            </select>
+
             <button
               onClick={handleSearch}
               disabled={loading}
@@ -340,11 +375,19 @@ export default function Home() {
                   key={i}
                   className="bg-gray-800 rounded-lg overflow-hidden shadow-lg hover:shadow-xl transition-shadow"
                 >
-                  <img
-                    src={`${API_BASE_URL}/${img.file_path}`}
-                    alt="Search result"
-                    className="w-full h-64 object-cover object-center"
-                  />
+                  {img.media_type === "video" ? (
+                    <video
+                      src={`${API_BASE_URL}/${img.file_path}`}
+                      controls
+                      className="w-full h-64 object-cover object-center"
+                    />
+                  ) : (
+                    <img
+                      src={`${API_BASE_URL}/${img.file_path}`}
+                      alt="Search result"
+                      className="w-full h-64 object-cover object-center"
+                    />
+                  )}
                   <div className="p-4">
                     <Markdown>{img.text}</Markdown>
                   </div>
