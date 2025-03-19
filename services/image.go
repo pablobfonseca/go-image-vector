@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+
+	"github.com/spf13/viper"
 )
 
 type OllamaRequest struct {
@@ -31,9 +33,14 @@ func ExtractTextFromImage(imagePath string) (string, error) {
 	imageBytes, _ := io.ReadAll(file)
 	imageBase64 := base64.StdEncoding.EncodeToString(imageBytes)
 
+	model := viper.GetString("MODEL")
+	if model == "" {
+		model = "gemma3"
+	}
+
 	requestBody, _ := json.Marshal(OllamaRequest{
-		Model:  "llava",
-		Prompt: "Tell me what's happening in this image and figure out the context in natural language",
+		Model:  model,
+		Prompt: "Tell me what's happening in this image and figure out the context in natural language, always respond using the markdown syntax",
 		Images: []string{imageBase64},
 		Stream: false,
 	})

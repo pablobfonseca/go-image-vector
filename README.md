@@ -48,6 +48,7 @@ DB_USER=postgres
 DB_PASSWORD=your_password
 DB_NAME=image_vector
 DB_PORT=5432
+MODEL=gemma3
 ```
 
 5. Install and start Ollama with the required models
@@ -92,4 +93,3 @@ npm run dev
 ## License
 
 MIT
-
