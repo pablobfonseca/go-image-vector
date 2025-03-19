@@ -3,6 +3,17 @@ import axios from "axios";
 import { useState, useEffect } from "react";
 import Markdown from "react-markdown";
 
+// Custom CSS for hiding scrollbars while allowing scrolling
+const scrollbarHideStyles = `
+  .scrollbar-hide {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none; /* Chrome, Safari, Opera */
+  }
+`;
+
 const API_BASE_URL = "http://localhost:8080";
 const API_VERSION = "/api/v1";
 
@@ -11,6 +22,9 @@ type Embedding = {
   file_path: string;
   text: string;
   embedding: Array<number>;
+  is_batch?: boolean;
+  batch_id?: string;
+  batch_paths?: Array<string>;
 };
 
 type TaskStatus = {
@@ -32,6 +46,8 @@ export default function Home() {
     message: string;
     type: "success" | "error" | "info";
   } | null>(null);
+  const [batchAnalyze, setBatchAnalyze] = useState<boolean>(false);
+  const [selectedBatchImage, setSelectedBatchImage] = useState<string>("");
 
   useEffect(() => {
     const taskIds = Array.from(processingTasks.keys()).filter(
@@ -100,6 +116,10 @@ export default function Home() {
         formData.append("images", file);
       });
 
+      if (files.length > 1 && batchAnalyze) {
+        formData.append("batch_analyze", "true");
+      }
+
       const response = await axios.post(
         `${API_BASE_URL}${API_VERSION}/upload`,
         formData,
@@ -148,6 +168,8 @@ export default function Home() {
 
   return (
     <div className="flex flex-col items-center min-h-screen bg-gray-900 text-white p-4 md:p-6">
+      {/* Add the custom styles */}
+      <style dangerouslySetInnerHTML={{ __html: scrollbarHideStyles }} />
       <div className="max-w-4xl w-full">
         <h1 className="text-3xl md:text-4xl font-bold text-center my-8">
           🖼️ Image Analyzer + Vector DB
@@ -194,6 +216,20 @@ export default function Home() {
             </div>
             {files.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-2">
+                {files.length > 1 && (
+                  <div className="mt-3 flex items-center">
+                    <input
+                      type="checkbox"
+                      id="batch-analyze"
+                      checked={batchAnalyze}
+                      onChange={(e) => setBatchAnalyze(e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500"
+                    />
+                    <label htmlFor="batch-analyze" className="ml-2 text-sm">
+                      Process images as a batch (analyze together)
+                    </label>
+                  </div>
+                )}
                 {files.map((file, index) => (
                   <div
                     key={index}
@@ -239,62 +275,99 @@ export default function Home() {
               {Array.from(processingTasks.entries()).map(([taskId, task]) => (
                 <div
                   key={taskId}
-                  className="p-3 rounded bg-gray-700 flex justify-between items-center"
+                  className="p-3 rounded bg-gray-700 flex flex-col"
                 >
-                  <div className="flex items-center">
-                    {task.status === "pending" ||
-                    task.status === "processing" ? (
-                      <div className="mr-3 h-4 w-4 border-2 border-t-blue-500 border-r-transparent border-b-transparent border-l-transparent rounded-full animate-spin" />
-                    ) : task.status === "completed" ? (
-                      <svg
-                        className="mr-3 h-5 w-5 text-green-500"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                    ) : (
-                      <svg
-                        className="mr-3 h-5 w-5 text-red-500"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M6 18L18 6M6 6l12 12"
-                        />
-                      </svg>
-                    )}
-                    <span>Task {taskId.substring(0, 8)}...</span>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center">
+                      {task.status === "pending" ||
+                      task.status === "processing" ? (
+                        <div className="mr-3 h-4 w-4 border-2 border-t-blue-500 border-r-transparent border-b-transparent border-l-transparent rounded-full animate-spin" />
+                      ) : task.status === "completed" ? (
+                        <svg
+                          className="mr-3 h-5 w-5 text-green-500"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M5 13l4 4L19 7"
+                          />
+                        </svg>
+                      ) : (
+                        <svg
+                          className="mr-3 h-5 w-5 text-red-500"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      )}
+                      <span>Task {taskId.substring(0, 8)}...</span>
+                      {task.result?.is_batch && (
+                        <span className="ml-2 bg-indigo-700 text-xs px-2 py-1 rounded">
+                          Batch
+                        </span>
+                      )}
+                    </div>
+                    <span
+                      className="px-2 py-1 text-xs rounded capitalize"
+                      style={{
+                        backgroundColor:
+                          task.status === "completed"
+                            ? "rgba(74, 222, 128, 0.2)"
+                            : task.status === "failed"
+                              ? "rgba(248, 113, 113, 0.2)"
+                              : "rgba(96, 165, 250, 0.2)",
+                        color:
+                          task.status === "completed"
+                            ? "rgb(74, 222, 128)"
+                            : task.status === "failed"
+                              ? "rgb(248, 113, 113)"
+                              : "rgb(96, 165, 250)",
+                      }}
+                    >
+                      {task.status}
+                    </span>
                   </div>
-                  <span
-                    className="px-2 py-1 text-xs rounded capitalize"
-                    style={{
-                      backgroundColor:
-                        task.status === "completed"
-                          ? "rgba(74, 222, 128, 0.2)"
-                          : task.status === "failed"
-                            ? "rgba(248, 113, 113, 0.2)"
-                            : "rgba(96, 165, 250, 0.2)",
-                      color:
-                        task.status === "completed"
-                          ? "rgb(74, 222, 128)"
-                          : task.status === "failed"
-                            ? "rgb(248, 113, 113)"
-                            : "rgb(96, 165, 250)",
-                    }}
-                  >
-                    {task.status}
-                  </span>
+
+                  {/* Image previews for tasks */}
+                  {task.result?.batch_paths &&
+                    task.result.batch_paths.length > 0 && (
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        {task.result.batch_paths.map(
+                          (path: string, idx: number) => (
+                            <img
+                              key={idx}
+                              src={`${API_BASE_URL}/${path}`}
+                              alt={`Batch image ${idx + 1}`}
+                              className="h-16 w-16 object-cover rounded"
+                            />
+                          ),
+                        )}
+                      </div>
+                    )}
+
+                  {/* For single image task that's completed */}
+                  {task.status === "completed" &&
+                    task.result?.file_path &&
+                    !task.result?.is_batch && (
+                      <div className="mt-3">
+                        <img
+                          src={`${API_BASE_URL}/${task.result.file_path}`}
+                          alt="Processed image"
+                          className="h-16 w-16 object-cover rounded"
+                        />
+                      </div>
+                    )}
                 </div>
               ))}
             </div>
@@ -340,11 +413,66 @@ export default function Home() {
                   key={i}
                   className="bg-gray-800 rounded-lg overflow-hidden shadow-lg hover:shadow-xl transition-shadow"
                 >
-                  <img
-                    src={`${API_BASE_URL}/${img.file_path}`}
-                    alt="Search result"
-                    className="w-full h-64 object-cover object-center"
-                  />
+                  {img.is_batch &&
+                  img.batch_paths &&
+                  img.batch_paths.length > 0 ? (
+                    <div className="relative">
+                      {/* Batch indicator */}
+                      <div className="absolute top-2 right-2 bg-indigo-600 text-white text-xs px-2 py-1 rounded-full z-10">
+                        Batch ({img.batch_paths.length} images)
+                      </div>
+
+                      {/* Image carousel for batch */}
+                      <div className="flex overflow-x-auto snap-x scrollbar-hide">
+                        {img.batch_paths.map((path, idx) => (
+                          <div
+                            key={idx}
+                            className="snap-start w-full h-64 flex-shrink-0"
+                          >
+                            <img
+                              src={`${API_BASE_URL}/${path}`}
+                              alt={`Batch image ${idx + 1}`}
+                              className="w-full h-64 object-cover object-center"
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Thumbnail navigation below */}
+                      <div className="flex justify-center mt-2 px-4">
+                        {img.batch_paths.map((path, idx) => (
+                          <img
+                            key={idx}
+                            src={`${API_BASE_URL}/${path}`}
+                            alt={`Thumbnail ${idx + 1}`}
+                            className="w-12 h-12 object-cover rounded mx-1 cursor-pointer border-2 border-transparent hover:border-blue-500"
+                            onClick={() => {
+                              // Find the parent scrollable container and scroll to this image
+                              const container = document.querySelector(
+                                `div[key="${i}"] .flex.overflow-x-auto`,
+                              );
+                              if (container) {
+                                const children =
+                                  container.querySelectorAll(".snap-start");
+                                if (children[idx]) {
+                                  children[idx].scrollIntoView({
+                                    behavior: "smooth",
+                                    inline: "start",
+                                  });
+                                }
+                              }
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <img
+                      src={`${API_BASE_URL}/${img.file_path}`}
+                      alt="Search result"
+                      className="w-full h-64 object-cover object-center"
+                    />
+                  )}
                   <div className="p-4">
                     <Markdown>{img.text}</Markdown>
                   </div>

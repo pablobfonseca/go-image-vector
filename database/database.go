@@ -34,6 +34,7 @@ func Connect() {
 	}
 
 	db.Exec("CREATE EXTENSION IF NOT EXISTS vector;")
+	db.Exec("CREATE INDEX IF NOT EXISTS ON image_vector USING hnsw (embedding vector_cosine_ops);")
 	db.AutoMigrate(&models.ImageEmbedding{})
 
 	DB = db

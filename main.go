@@ -48,8 +48,13 @@ func uploadImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskIDs := []string{}
+	// Check if batch analysis is requested
+	batchAnalyze := r.FormValue("batch_analyze") == "true"
 
+	taskIDs := []string{}
+	filePaths := []string{}
+
+	// Save all the uploaded files
 	for _, handler := range files {
 		file, err := handler.Open()
 		if err != nil {
@@ -75,14 +80,37 @@ func uploadImage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Queue the image analysis task
+		filePaths = append(filePaths, filePath)
+
+		// If not doing batch analysis, queue each image individually
+		if !batchAnalyze {
+			// Queue the image analysis task
+			taskData := map[string]any{
+				"file_path": filePath,
+			}
+
+			taskID, err := queue.Enqueue(queue.ImageProcessingQueue, worker.TaskTypeAnalyzeImage, taskData)
+			if err != nil {
+				http.Error(w, "Failed to queue image for processing: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			// Set initial task status
+			queue.SetTaskStatus(taskID, "pending")
+			taskIDs = append(taskIDs, taskID)
+		}
+	}
+
+	// If batch analysis is requested, queue a single task for all images
+	if batchAnalyze && len(filePaths) > 0 {
+		// Queue the batch analysis task
 		taskData := map[string]any{
-			"file_path": filePath,
+			"file_paths": filePaths,
 		}
 
-		taskID, err := queue.Enqueue(queue.ImageProcessingQueue, worker.TaskTypeAnalyzeImage, taskData)
+		taskID, err := queue.Enqueue(queue.ImageProcessingQueue, worker.TaskTypeAnalyzeMultipleImages, taskData)
 		if err != nil {
-			http.Error(w, "Failed to queue image for processing: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to queue batch image analysis: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -93,8 +121,9 @@ func uploadImage(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]any{
-		"message":  "Images uploaded and queued for processing",
-		"task_ids": taskIDs,
+		"message":       "Images uploaded and queued for processing",
+		"task_ids":      taskIDs,
+		"batch_analyze": batchAnalyze,
 	})
 }
 
@@ -166,6 +195,26 @@ func searchImages(w http.ResponseWriter, r *http.Request) {
 		pgvector.NewVector(queryEmbedding), req.TopK).Scan(&results).Error; err != nil {
 		http.Error(w, "Failed to search database: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// For batch results, fetch the associated image paths if they exist
+	for i, result := range results {
+		if result.IsBatch && result.BatchID != "" {
+			// Get all the batch paths for this batch from Redis
+			batchResult, err := queue.GetTaskResult(result.BatchID)
+			if err == nil && batchResult != nil {
+				if batchPaths, ok := batchResult["batch_paths"].([]any); ok {
+					// Convert the interface slice to string slice
+					stringPaths := make([]string, 0, len(batchPaths))
+					for _, path := range batchPaths {
+						if strPath, ok := path.(string); ok {
+							stringPaths = append(stringPaths, strPath)
+						}
+					}
+					results[i].BatchPaths = stringPaths
+				}
+			}
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)

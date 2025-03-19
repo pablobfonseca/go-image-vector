@@ -17,7 +17,8 @@ import (
 
 // Task types
 const (
-	TaskTypeAnalyzeImage = "analyze_image"
+	TaskTypeAnalyzeImage          = "analyze_image"
+	TaskTypeAnalyzeMultipleImages = "analyze_multiple_images"
 )
 
 // Worker represents a background worker that processes tasks from a queue
@@ -111,6 +112,8 @@ func (w *Worker) processItems(workerID int) {
 			switch task.TaskType {
 			case TaskTypeAnalyzeImage:
 				result, processErr = processImageAnalysisTask(task)
+			case TaskTypeAnalyzeMultipleImages:
+				result, processErr = processMultipleImagesAnalysisTask(task)
 			default:
 				processErr = nil
 				result = map[string]any{
@@ -173,10 +176,71 @@ func processImageAnalysisTask(task *queue.TaskPayload) (map[string]any, error) {
 	}
 
 	// Return result
-	return map[string]interface{}{
+	return map[string]any{
 		"id":        imageEntry.ID,
 		"file_path": imageEntry.FilePath,
 		"text":      imageEntry.Text,
+	}, nil
+}
+
+// processMultipleImagesAnalysisTask processes a batch of images together for journey analysis
+func processMultipleImagesAnalysisTask(task *queue.TaskPayload) (map[string]any, error) {
+	// Extract file paths from task data
+	filePaths, ok := task.Data["file_paths"].([]any)
+	if !ok {
+		return nil, nil
+	}
+
+	// Convert to string slice
+	stringPaths := make([]string, 0, len(filePaths))
+	for _, path := range filePaths {
+		if strPath, ok := path.(string); ok {
+			stringPaths = append(stringPaths, strPath)
+		}
+	}
+
+	if len(stringPaths) == 0 {
+		return nil, nil
+	}
+
+	// Extract text from multiple images using AI
+	journeyText, err := services.ExtractTextFromMultipleImages(stringPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate embedding from the combined journey text
+	embedding, err := services.GenerateEmbedding(journeyText)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate a batch ID to link all images in this batch
+	batchID := task.TaskID
+
+	// Create a combined record for the journey
+	journeyEntry := models.ImageEmbedding{
+		FilePath:   stringPaths[0],
+		Text:       journeyText,
+		Embedding:  pgvector.NewVector(embedding),
+		IsBatch:    true,
+		BatchID:    batchID,
+		BatchPaths: stringPaths,
+	}
+
+	if err := database.DB.Create(&journeyEntry).Error; err != nil {
+		return nil, err
+	}
+
+	// Return result with all file paths in the batch
+	return map[string]any{
+		"id":          journeyEntry.ID,
+		"file_path":   journeyEntry.FilePath,
+		"text":        journeyEntry.Text,
+		"file_count":  len(stringPaths),
+		"is_batch":    true,
+		"batch_id":    batchID,
+		"batch_paths": stringPaths,
 	}, nil
 }
 
