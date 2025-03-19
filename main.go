@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -103,10 +104,32 @@ func uploadImage(w http.ResponseWriter, r *http.Request) {
 
 	// If batch analysis is requested, queue a single task for all images
 	if batchAnalyze && len(filePaths) > 0 {
-		// Queue the batch analysis task
-		taskData := map[string]any{
-			"file_paths": filePaths,
+		// Get batch processing parameters from form (if provided) or use defaults
+		maxChunkSize := viper.GetInt("BATCH_CHUNK_SIZE")
+		maxParallel := viper.GetInt("BATCH_MAX_PARALLEL")
+
+		// Check if parameters were explicitly provided in the request
+		if chunkSizeStr := r.FormValue("max_chunk_size"); chunkSizeStr != "" {
+			if val, err := fmt.Sscanf(chunkSizeStr, "%d", &maxChunkSize); err != nil || val <= 0 {
+				maxChunkSize = viper.GetInt("BATCH_CHUNK_SIZE")
+			}
 		}
+
+		if parallelStr := r.FormValue("max_parallel"); parallelStr != "" {
+			if val, err := fmt.Sscanf(parallelStr, "%d", &maxParallel); err != nil || val <= 0 {
+				maxParallel = viper.GetInt("BATCH_MAX_PARALLEL")
+			}
+		}
+
+		// Queue the batch analysis task with processing parameters
+		taskData := map[string]any{
+			"file_paths":     filePaths,
+			"max_chunk_size": float64(maxChunkSize),
+			"max_parallel":   float64(maxParallel),
+		}
+
+		log.Printf("Queueing batch with %d images: chunk_size=%d, parallel=%d",
+			len(filePaths), maxChunkSize, maxParallel)
 
 		taskID, err := queue.Enqueue(queue.ImageProcessingQueue, worker.TaskTypeAnalyzeMultipleImages, taskData)
 		if err != nil {
@@ -119,12 +142,34 @@ func uploadImage(w http.ResponseWriter, r *http.Request) {
 		taskIDs = append(taskIDs, taskID)
 	}
 
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]any{
+	response := map[string]any{
 		"message":       "Images uploaded and queued for processing",
 		"task_ids":      taskIDs,
 		"batch_analyze": batchAnalyze,
-	})
+	}
+
+	// Add batch processing parameters to response if we're doing batch analysis
+	if batchAnalyze && len(filePaths) > 0 {
+		response["max_chunk_size"] = viper.GetInt("BATCH_CHUNK_SIZE")
+		response["max_parallel"] = viper.GetInt("BATCH_MAX_PARALLEL")
+		response["file_count"] = len(filePaths)
+
+		// Only add actual parameters if they were provided and different from defaults
+		if chunkSizeStr := r.FormValue("max_chunk_size"); chunkSizeStr != "" {
+			if val, err := strconv.Atoi(chunkSizeStr); err == nil && val > 0 {
+				response["max_chunk_size"] = val
+			}
+		}
+
+		if parallelStr := r.FormValue("max_parallel"); parallelStr != "" {
+			if val, err := strconv.Atoi(parallelStr); err == nil && val > 0 {
+				response["max_parallel"] = val
+			}
+		}
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(response)
 }
 
 // getTaskStatus retrieves the status of a task
@@ -221,6 +266,28 @@ func searchImages(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
+// getConfig returns current system configuration
+func getConfig(w http.ResponseWriter, r *http.Request) {
+	config := map[string]any{
+		// Worker configuration
+		"worker_count": viper.GetInt("WORKER_COUNT"),
+
+		// Batch processing configuration
+		"batch_chunk_size":   viper.GetInt("BATCH_CHUNK_SIZE"),
+		"batch_max_parallel": viper.GetInt("BATCH_MAX_PARALLEL"),
+
+		// Model configuration
+		"model":           viper.GetString("MODEL"),
+		"embedding_model": viper.GetString("EMBEDDING_MODEL"),
+
+		// System info
+		"version": "1.1.0", // Update with your actual version
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(config)
+}
+
 func main() {
 	database.Connect()
 
@@ -243,9 +310,11 @@ func main() {
 	apiRouter.HandleFunc("/upload", uploadImage).Methods("POST")
 	apiRouter.HandleFunc("/search", searchImages).Methods("POST")
 	apiRouter.HandleFunc("/tasks/{taskID}", getTaskStatus).Methods("GET")
+	apiRouter.HandleFunc("/config", getConfig).Methods("GET")
 
 	r.HandleFunc("/upload", uploadImage).Methods("POST")
 	r.HandleFunc("/search", searchImages).Methods("POST")
+	r.HandleFunc("/config", getConfig).Methods("GET")
 
 	uploadsDir := "./uploads"
 	if _, err := os.Stat(uploadsDir); os.IsNotExist(err) {
@@ -325,6 +394,10 @@ func init() {
 	viper.SetDefault("REDIS_ADDR", "localhost:6379")
 	viper.SetDefault("REDIS_DB", 0)
 	viper.SetDefault("REDIS_PASSWORD", "")
+
+	// Batch processing configuration
+	viper.SetDefault("BATCH_CHUNK_SIZE", 3)   // Max images per chunk
+	viper.SetDefault("BATCH_MAX_PARALLEL", 4) // Max parallel processing
 
 	if err := viper.ReadInConfig(); err != nil {
 		log.Println("Warning: Error reading .env file:", err)

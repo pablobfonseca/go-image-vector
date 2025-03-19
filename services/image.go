@@ -158,3 +158,118 @@ func ExtractTextFromMultipleImages(imagePaths []string) (string, error) {
 
 	return "", fmt.Errorf("no response field in API result")
 }
+
+// ParallelExtractTextFromImages processes images in parallel and then combines the results
+// maxChunkSize: maximum number of images to process in a single API call
+// maxParallel: maximum number of parallel processing operations
+func ParallelExtractTextFromImages(imagePaths []string, maxChunkSize int, maxParallel int) (string, error) {
+	if len(imagePaths) == 0 {
+		return "", fmt.Errorf("no image paths provided")
+	}
+
+	// For small batches, use the original method
+	if len(imagePaths) <= maxChunkSize {
+		return ExtractTextFromMultipleImages(imagePaths)
+	}
+
+	// Split into chunks
+	chunks := make([][]string, 0)
+	for i := 0; i < len(imagePaths); i += maxChunkSize {
+		end := i + maxChunkSize
+		if end > len(imagePaths) {
+			end = len(imagePaths)
+		}
+		chunks = append(chunks, imagePaths[i:end])
+	}
+
+	// Process chunks in parallel
+	type chunkResult struct {
+		index int
+		text  string
+		err   error
+	}
+
+	resultChan := make(chan chunkResult, len(chunks))
+	sem := make(chan struct{}, maxParallel) // Limit concurrency
+
+	for i, chunk := range chunks {
+		go func(idx int, imgPaths []string) {
+			sem <- struct{}{}        // Acquire semaphore
+			defer func() { <-sem }() // Release semaphore
+
+			// Process this chunk
+			text, err := ExtractTextFromMultipleImages(imgPaths)
+			resultChan <- chunkResult{idx, text, err}
+		}(i, chunk)
+	}
+
+	// Collect results in order
+	chunkTexts := make([]string, len(chunks))
+	for range chunks {
+		result := <-resultChan
+		if result.err != nil {
+			return "", result.err
+		}
+		chunkTexts[result.index] = result.text
+	}
+
+	// If we only had one chunk after all, return that result
+	if len(chunkTexts) == 1 {
+		return chunkTexts[0], nil
+	}
+
+	// Now synthesize a combined analysis from the chunk results
+	model := viper.GetString("MODEL")
+	if model == "" {
+		model = "gemma3"
+	}
+
+	ollamaHost := os.Getenv("OLLAMA_HOST")
+	if ollamaHost == "" {
+		ollamaHost = "localhost"
+	}
+
+	ollamaURL := fmt.Sprintf("http://%s:11434/api/generate", ollamaHost)
+
+	// Final synthesis prompt
+	synthesisPrompt := "I've analyzed parts of a user journey through a website and need to combine them into a cohesive narrative.\n\n" +
+		"Here are the separate analyses: \n\n" +
+		"```\n" +
+		fmt.Sprintf("%s", chunkTexts) +
+		"\n```\n\n" +
+		"Please synthesize these analyses into a single coherent narrative that describes the complete user journey. " +
+		"Avoid repetition, ensure continuity, and focus on the overall flow and user goals. " +
+		"Always respond using markdown syntax."
+
+	requestBody, _ := json.Marshal(map[string]any{
+		"model":  model,
+		"prompt": synthesisPrompt,
+		"stream": false,
+	})
+
+	resp, err := http.Post(ollamaURL, "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to call Ollama for synthesis: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse synthesis response: %v", err)
+	}
+
+	// Check if the response field exists
+	if response, ok := result["response"]; ok {
+		switch v := response.(type) {
+		case string:
+			return v, nil
+		case bool, float64, int:
+			return fmt.Sprintf("%v", v), nil
+		default:
+			return "", fmt.Errorf("unexpected synthesis response type: %T", v)
+		}
+	}
+
+	return "", fmt.Errorf("no response field in synthesis API result")
+}

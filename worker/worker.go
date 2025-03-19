@@ -13,6 +13,7 @@ import (
 	"github.com/pablobfonseca/go-image-vector/queue"
 	"github.com/pablobfonseca/go-image-vector/services"
 	"github.com/pgvector/pgvector-go"
+	"github.com/spf13/viper"
 )
 
 // Task types
@@ -203,8 +204,38 @@ func processMultipleImagesAnalysisTask(task *queue.TaskPayload) (map[string]any,
 		return nil, nil
 	}
 
-	// Extract text from multiple images using AI
-	journeyText, err := services.ExtractTextFromMultipleImages(stringPaths)
+	// Get optional configuration from task data or use defaults
+	maxChunkSize := viper.GetInt("BATCH_CHUNK_SIZE")
+	maxParallel := viper.GetInt("BATCH_MAX_PARALLEL") // Default: run 4 parallel operations
+
+	if val, ok := task.Data["max_chunk_size"].(float64); ok {
+		maxChunkSize = int(val)
+	}
+	if val, ok := task.Data["max_parallel"].(float64); ok {
+		maxParallel = int(val)
+	}
+
+	// Log processing configuration
+	log.Printf("Processing batch with %d images: chunk_size=%d, parallel=%d",
+		len(stringPaths), maxChunkSize, maxParallel)
+
+	// Extract text from multiple images using parallel processing
+	var journeyText string
+	var err error
+
+	// Time the operation
+	startTime := time.Now()
+
+	// If batch is small, use standard method, otherwise use parallel method
+	if len(stringPaths) <= maxChunkSize {
+		journeyText, err = services.ExtractTextFromMultipleImages(stringPaths)
+	} else {
+		journeyText, err = services.ParallelExtractTextFromImages(stringPaths, maxChunkSize, maxParallel)
+	}
+
+	processingTime := time.Since(startTime)
+	log.Printf("Batch processing completed in %v", processingTime)
+
 	if err != nil {
 		return nil, err
 	}
@@ -234,13 +265,14 @@ func processMultipleImagesAnalysisTask(task *queue.TaskPayload) (map[string]any,
 
 	// Return result with all file paths in the batch
 	return map[string]any{
-		"id":          journeyEntry.ID,
-		"file_path":   journeyEntry.FilePath,
-		"text":        journeyEntry.Text,
-		"file_count":  len(stringPaths),
-		"is_batch":    true,
-		"batch_id":    batchID,
-		"batch_paths": stringPaths,
+		"id":                 journeyEntry.ID,
+		"file_path":          journeyEntry.FilePath,
+		"text":               journeyEntry.Text,
+		"file_count":         len(stringPaths),
+		"is_batch":           true,
+		"batch_id":           batchID,
+		"batch_paths":        stringPaths,
+		"processing_time_ms": processingTime.Milliseconds(),
 	}, nil
 }
 
